@@ -1,0 +1,89 @@
+{
+  "name": "02 自动跟进序列",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 9 * * 1-5" }] }
+      },
+      "id": "f1",
+      "name": "工作日 9 点触发",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getAll",
+        "databaseId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.NOTION_LEADS_DB_ID }}"
+        },
+        "returnAll": true,
+        "options": {}
+      },
+      "id": "f2",
+      "name": "读取线索库",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [240, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 跟进节奏: 首次触达后第 3/7/14 天各跟进一次;已回复/已成交/已流失/退订 的线索跳过\nconst STOP = ['已回复', '已成交', '已流失', '退订'];\nconst STEPS = [\n  { day: 3,  angle: '补充一个与其行业相关的具体案例' },\n  { day: 7,  angle: '分享一个可量化的结果或数据' },\n  { day: 14, angle: '礼貌收尾,询问是否有更合适的对接人' },\n];\nconst out = [];\nfor (const item of $input.all()) {\n  const p = item.json.properties ?? {};\n  const status = p['状态']?.select?.name ?? '';\n  const email = p['邮箱']?.email ?? '';\n  const grade = p['等级']?.select?.name ?? '';\n  const lastContact = p['最后联系']?.date?.start;\n  const step = Number(p['跟进步数']?.number ?? 0);\n  if (!email || STOP.includes(status) || grade === 'C') continue;\n  if (!lastContact || step >= STEPS.length) continue;\n  const days = Math.floor((Date.now() - new Date(lastContact).getTime()) / 86400000);\n  const target = STEPS[step];\n  if (days < target.day) continue;\n  const name = (item.json.properties?.['Name']?.title ?? item.json.properties?.['名称']?.title ?? [])[0]?.plain_text ?? '';\n  out.push({ json: { pageId: item.json.id, email, name, step: step + 1, angle: target.angle, isLast: step + 1 === STEPS.length } });\n}\nreturn out;"
+      },
+      "id": "f3",
+      "name": "筛选到期线索",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 0]
+    },
+    {
+      "parameters": {
+        "resource": "draft",
+        "operation": "create",
+        "subject": "=Re: 跟进({{ $json.step }}/3)",
+        "message": "=<p>您好,</p><p>上次和您提过:{{ $env.PRODUCT_PITCH }}</p><p>这次想{{ $json.angle }}。方便的话回复我一个时间,我们聊 15 分钟。</p><p>{{ $env.SENDER_NAME }}</p><p style=\"color:#888;font-size:12px\">如不希望再收到此类邮件,直接回复“退订”即可。</p>",
+        "options": { "sendTo": "={{ $json.email }}" }
+      },
+      "id": "f4",
+      "name": "Gmail 生成跟进草稿",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [720, 0]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('筛选到期线索').item.json.pageId }}"
+        },
+        "propertiesUi": {
+          "propertyValues": [
+            { "key": "跟进步数|number", "numberValue": "={{ $('筛选到期线索').item.json.step }}" },
+            { "key": "最后联系|date", "includeTime": false, "date": "={{ $now.toISODate() }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f5",
+      "name": "更新跟进进度",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [960, 0]
+    }
+  ],
+  "connections": {
+    "工作日 9 点触发": { "main": [[{ "node": "读取线索库", "type": "main", "index": 0 }]] },
+    "读取线索库": { "main": [[{ "node": "筛选到期线索", "type": "main", "index": 0 }]] },
+    "筛选到期线索": { "main": [[{ "node": "Gmail 生成跟进草稿", "type": "main", "index": 0 }]] },
+    "Gmail 生成跟进草稿": { "main": [[{ "node": "更新跟进进度", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "active": false,
+  "tags": []
+}

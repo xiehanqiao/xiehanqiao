@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "5678:5678"
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      N8N_HOST: ${N8N_HOST}
+      N8N_PROTOCOL: ${N8N_PROTOCOL}
+      WEBHOOK_URL: ${WEBHOOK_URL}
+      GENERIC_TIMEZONE: ${TIMEZONE}
+      TZ: ${TIMEZONE}
+      # 允许工作流表达式里读取 {{ $env.XXX }}(用于 API Key、Notion 库 ID 等)
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      NOTION_LEADS_DB_ID: ${NOTION_LEADS_DB_ID}
+      SLACK_LEADS_CHANNEL: ${SLACK_LEADS_CHANNEL}
+      SLACK_CONTENT_CHANNEL: ${SLACK_CONTENT_CHANNEL}
+      PRODUCT_PITCH: ${PRODUCT_PITCH}
+      SENDER_NAME: ${SENDER_NAME}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./workflows:/workflows:ro
+
+volumes:
+  pg_data:
+  n8n_data:

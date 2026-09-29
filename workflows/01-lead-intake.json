@@ -1,0 +1,130 @@
+{
+  "name": "01 线索入库与评分",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "n1",
+      "name": "Webhook 接收线索",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "lead-intake"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 期望入参: company, contact_name, title, email, industry, employees, source, note\nconst results = [];\nfor (const item of $input.all()) {\n  const b = item.json.body ?? item.json;\n  const emp = Number(b.employees) || 0;\n  const title = String(b.title || '').toLowerCase();\n  let score = 0;\n  // 决策人职位\n  if (/(ceo|founder|owner|总经理|董事|创始|合伙|vp|总监|director|head)/.test(title)) score += 35;\n  else if (/(manager|经理|采购|buyer|主管)/.test(title)) score += 20;\n  // 公司规模\n  if (emp >= 50 && emp <= 1000) score += 30;\n  else if (emp > 1000) score += 20;\n  else if (emp >= 10) score += 10;\n  // 有企业邮箱\n  const email = String(b.email || '').toLowerCase();\n  if (email && !/@(gmail|qq|163|126|outlook|hotmail|yahoo)\\./.test(email)) score += 20;\n  // 有备注/明确需求\n  if (String(b.note || '').length > 10) score += 15;\n  const grade = score >= 70 ? 'A' : score >= 45 ? 'B' : 'C';\n  results.push({ json: {\n    company: b.company || '',\n    contact_name: b.contact_name || '',\n    title: b.title || '',\n    email,\n    industry: b.industry || '',\n    employees: emp,\n    source: b.source || 'webhook',\n    note: b.note || '',\n    score, grade,\n    status: '新线索',\n    created_at: new Date().toISOString(),\n  }});\n}\nreturn results;"
+      },
+      "id": "n2",
+      "name": "标准化与打分",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 0]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.NOTION_LEADS_DB_ID }}"
+        },
+        "title": "={{ $json.company }} - {{ $json.contact_name }}",
+        "propertiesUi": {
+          "propertyValues": [
+            { "key": "评分|number", "numberValue": "={{ $json.score }}" },
+            { "key": "等级|select", "selectValue": "={{ $json.grade }}" },
+            { "key": "状态|select", "selectValue": "={{ $json.status }}" },
+            { "key": "邮箱|email", "emailValue": "={{ $json.email }}" },
+            { "key": "职位|rich_text", "richText": false, "textContent": "={{ $json.title }}" },
+            { "key": "行业|rich_text", "richText": false, "textContent": "={{ $json.industry }}" },
+            { "key": "来源|rich_text", "richText": false, "textContent": "={{ $json.source }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "n3",
+      "name": "写入 Notion 线索库",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [480, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $('标准化与打分').item.json.grade }}",
+              "rightValue": "A",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "n4",
+      "name": "是否 A 级线索",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [720, 0]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "={{ $env.SLACK_LEADS_CHANNEL }}"
+        },
+        "text": "=🔥 A 级线索\n公司: {{ $('标准化与打分').item.json.company }}\n联系人: {{ $('标准化与打分').item.json.contact_name }}({{ $('标准化与打分').item.json.title }})\n评分: {{ $('标准化与打分').item.json.score }}\n邮箱: {{ $('标准化与打分').item.json.email }}\n请尽快人工跟进。",
+        "otherOptions": {}
+      },
+      "id": "n5",
+      "name": "Slack 通知销售",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [960, -80]
+    },
+    {
+      "parameters": {
+        "resource": "draft",
+        "operation": "create",
+        "subject": "={{ $('标准化与打分').item.json.company }} × {{ $env.SENDER_NAME }}:一个可能对你们有用的想法",
+        "message": "=<p>{{ $('标准化与打分').item.json.contact_name }} 您好,</p><p>{{ $env.PRODUCT_PITCH }}</p><p>看到贵司在 {{ $('标准化与打分').item.json.industry }} 领域的动作,想约 15 分钟聊聊是否有合作空间?</p><p>{{ $env.SENDER_NAME }}</p>",
+        "options": {
+          "sendTo": "={{ $('标准化与打分').item.json.email }}"
+        }
+      },
+      "id": "n6",
+      "name": "Gmail 创建开发信草稿",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [960, 80]
+    }
+  ],
+  "connections": {
+    "Webhook 接收线索": { "main": [[{ "node": "标准化与打分", "type": "main", "index": 0 }]] },
+    "标准化与打分": { "main": [[{ "node": "写入 Notion 线索库", "type": "main", "index": 0 }]] },
+    "写入 Notion 线索库": { "main": [[{ "node": "是否 A 级线索", "type": "main", "index": 0 }]] },
+    "是否 A 级线索": {
+      "main": [
+        [
+          { "node": "Slack 通知销售", "type": "main", "index": 0 },
+          { "node": "Gmail 创建开发信草稿", "type": "main", "index": 0 }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "active": false,
+  "tags": []
+}
